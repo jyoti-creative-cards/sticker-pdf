@@ -16,10 +16,11 @@ FONT_REQ        = "ArialBlack"
 FONT_SIZE_PT    = 18
 FONT_MIN_PT     = 12
 TEXT_COLOR      = Color(128/255, 0, 0)   # maroon
-DRAW_BORDERS    = True
+DRAW_BORDERS    = False
 BORDER_COLOR    = black
 LINE_COLOR      = black
 LINE_THICK_PT   = 1.0
+SHOW_DIVIDER  = False   # add near other constants
 
 # Divider & text padding (inches)
 INNER_PAD_IN  = 0.05
@@ -75,10 +76,11 @@ def draw_sticker(c, x_pt, y_pt, w_pt, h_pt, top_text, bottom_text,
 
     # Divider at halfway
     line_y = y_pt + h_pt * 0.5
-    line_pad = INNER_PAD_IN * inch
-    c.setStrokeColor(LINE_COLOR)
-    c.setLineWidth(LINE_THICK_PT)
-    c.line(x_pt + line_pad, line_y, x_pt + w_pt - line_pad, line_y)
+    if SHOW_DIVIDER:
+        line_pad = INNER_PAD_IN * inch
+        c.setStrokeColor(LINE_COLOR)
+        c.setLineWidth(LINE_THICK_PT)
+        c.line(x_pt + line_pad, line_y, x_pt + w_pt - line_pad, line_y)
 
     # Text regions + padding
     vpad = V_TEXT_PAD_IN * inch
