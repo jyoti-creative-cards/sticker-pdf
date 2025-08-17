@@ -11,7 +11,7 @@ from reportlab.lib.colors import Color, black
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-# ======== Fixed look & feel (as requested) ========
+# ======== Fixed look & feel ========
 FONT_REQ        = "ArialBlack"
 FONT_SIZE_PT    = 18
 FONT_MIN_PT     = 12
@@ -22,9 +22,9 @@ LINE_COLOR      = black
 LINE_THICK_PT   = 1.0
 
 # Divider & text padding (inches)
-INNER_PAD_IN  = 0.05   # divider line horizontal inset
-V_TEXT_PAD_IN = 0.06   # vertical pad away from top/divider/bottom
-H_TEXT_PAD_IN = 0.06   # left/right pad for text fit
+INNER_PAD_IN  = 0.05
+V_TEXT_PAD_IN = 0.06
+H_TEXT_PAD_IN = 0.06
 
 # ======== Font helpers ========
 def try_register_arial_black() -> str:
@@ -101,18 +101,17 @@ def compute_grid(work_w_in, work_h_in, sticker_w_in, sticker_h_in):
     rows = max(int(math.floor(work_h_in / sticker_h_in)), 0)
     return cols, rows, cols * rows
 
-# ======== PDF writer (dynamic grid per user specs, pad last page) ========
+# ======== PDF writer (dynamic grid per specs, pad last page) ========
 def make_multi_sticker_pdf_dynamic(
     jobs_df: pd.DataFrame,
     page_w_in: float, page_h_in: float, margin_in: float,
     sticker_w_in: float, sticker_h_in: float,
-) -> tuple[bytes, dict]:
+):
     """
-    - Computes grid from specs (cols×rows).
-    - Uses that fixed per-page capacity across all pages.
-    - Pads the last page with blank cells so every page has the same # of slots.
+    - Grid = floor(working_area / sticker_size)
+    - Constant per-page capacity across all pages
+    - Pad last page from top-left so it still has full grid with trailing blanks
     """
-    # sanitize input rows
     df = jobs_df.copy().fillna("")
     df["top"] = df["top"].astype(str).str.strip()
     df["bottom"] = df["bottom"].astype(str).str.strip()
@@ -121,7 +120,6 @@ def make_multi_sticker_pdf_dynamic(
     if df.empty:
         raise ValueError("No valid sticker rows. Fill top, bottom, and a positive count.")
 
-    # working area (inches)
     work_w_in = page_w_in - 2 * margin_in
     work_h_in = page_h_in - 2 * margin_in
     if work_w_in <= 0 or work_h_in <= 0:
@@ -129,10 +127,7 @@ def make_multi_sticker_pdf_dynamic(
 
     cols, rows, capacity = compute_grid(work_w_in, work_h_in, sticker_w_in, sticker_h_in)
     if capacity <= 0:
-        raise ValueError(
-            "Sticker size does not fit the working area. "
-            "Increase page size / reduce margins / reduce sticker size."
-        )
+        raise ValueError("Sticker size does not fit the working area. Increase page, reduce margins, or shrink stickers.")
 
     # points
     page_w_pt = page_w_in * inch
@@ -142,7 +137,7 @@ def make_multi_sticker_pdf_dynamic(
     sticker_w_pt = sticker_w_in * inch
     sticker_h_pt = sticker_h_in * inch
 
-    # center the grid within the working area
+    # center the grid inside working area
     used_w_pt = cols * sticker_w_pt
     used_h_pt = rows * sticker_h_pt
     work_w_pt = work_w_in * inch
@@ -150,50 +145,44 @@ def make_multi_sticker_pdf_dynamic(
     offset_x_pt = (work_w_pt - used_w_pt) / 2.0
     offset_y_pt = (work_h_pt - used_h_pt) / 2.0
 
-    # PDF buffer
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(page_w_pt, page_h_pt))
     font_name = try_register_arial_black()
 
-    # generator over all requested stickers
+    # order preserved exactly as entered
     def sticker_stream():
         for _, row in df.iterrows():
-            top, bottom, count = row["top"], row["bottom"], int(row["count"])
-            for _ in range(count):
-                yield (top, bottom)
+            for _ in range(int(row["count"])):
+                yield (row["top"], row["bottom"])
 
     stream = sticker_stream()
     total_count = int(df["count"].sum())
     drawn = 0
 
-    # Always create pages of constant 'capacity'
     while True:
         for slot in range(capacity):
             try:
                 top, bottom = next(stream)
                 is_blank = False
             except StopIteration:
-                # after stickers end, pad remaining slots with blanks
                 top, bottom = "", ""
                 is_blank = True
 
             # Row-major, TOP-LEFT first:
-            r = slot // cols           # 0..rows-1 (top-first logical row)
-            col = slot % cols          # 0..cols-1 (left to right)
-            row_from_bottom = (rows - 1) - r  # convert to ReportLab's bottom-origin
+            r = slot // cols                 # 0..rows-1 (top-first logical row)
+            col = slot % cols                # 0..cols-1 (left→right)
+            row_from_bottom = (rows - 1) - r
             x = left_margin_pt + offset_x_pt + col * sticker_w_pt
             y = bottom_margin_pt + offset_y_pt + row_from_bottom * sticker_h_pt
 
-            draw_sticker(
-                c, x, y, sticker_w_pt, sticker_h_pt,
-                top, bottom, font_name, FONT_SIZE_PT, TEXT_COLOR, DRAW_BORDERS
-            )
+            draw_sticker(c, x, y, sticker_w_pt, sticker_h_pt,
+                         top, bottom, font_name, FONT_SIZE_PT, TEXT_COLOR, DRAW_BORDERS)
             if not is_blank:
                 drawn += 1
 
         c.showPage()
         if drawn >= total_count:
-            break  # last page just got padded to a full grid
+            break
 
     c.save()
     pdf_bytes = buf.getvalue()
@@ -220,48 +209,66 @@ with st.sidebar:
 work_w = page_w_in - 2*margin_in
 work_h = page_h_in - 2*margin_in
 cols, rows, capacity = compute_grid(work_w, work_h, sticker_w_in, sticker_h_in)
-st.caption(
-    f"Working area: **{work_w:.3f} × {work_h:.3f} in**  ·  "
-    f"Grid: **{cols} × {rows} = {capacity}** stickers per page"
-)
+st.caption(f"Working area: **{work_w:.3f} × {work_h:.3f} in** · Grid: **{cols} × {rows} = {capacity}** per page")
 
-# Sticker table
-if "jobs_df" not in st.session_state:
-    st.session_state.jobs_df = pd.DataFrame([{"top": "5001", "bottom": "19608", "count": 1}])
+# Session state: list of stickers [{top, bottom, count}, ...]
+if "stickers" not in st.session_state:
+    st.session_state.stickers = [{"top": "5001", "bottom": "19608", "count": 1}]
+if "show_add_form" not in st.session_state:
+    st.session_state.show_add_form = False
 
-st.subheader("Sticker entries")
-st.session_state.jobs_df = st.data_editor(
-    st.session_state.jobs_df,
-    key="editor",
-    num_rows="dynamic",
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "top": {"label": "Top (upper value)"},
-        "bottom": {"label": "Bottom (lower value)"},
-        "count": {"label": "Number of stickers", "step": 1, "min_value": 1, "required": True},
-    }
-)
+# Add sticker flow (mobile-friendly)
+if not st.session_state.show_add_form:
+    if st.button("➕ Add sticker", use_container_width=True):
+        st.session_state.show_add_form = True
+else:
+    with st.form("add_sticker_form", clear_on_submit=True):
+        top_val = st.text_input("Top (upper value)")
+        bottom_val = st.text_input("Bottom (lower value)")
+        count_val = st.number_input("Number of stickers", min_value=1, step=1, value=1)
+        c1, c2 = st.columns(2)
+        add_clicked = c1.form_submit_button("Add", use_container_width=True)
+        cancel_clicked = c2.form_submit_button("Cancel", use_container_width=True)
 
-left, right = st.columns([1,1])
-with left:
-    if st.button("➕ Add sticker row", use_container_width=True):
-        st.session_state.jobs_df = pd.concat(
-            [st.session_state.jobs_df, pd.DataFrame([{"top": "", "bottom": "", "count": 1}])],
-            ignore_index=True
-        )
-with right:
-    if st.button("🧹 Clear all rows", use_container_width=True):
-        st.session_state.jobs_df = pd.DataFrame([{"top": "", "bottom": "", "count": 1}])
+    if add_clicked:
+        t = (top_val or "").strip()
+        b = (bottom_val or "").strip()
+        if not t or not b:
+            st.warning("Please enter both Top and Bottom values.")
+        else:
+            st.session_state.stickers.append({"top": t, "bottom": b, "count": int(count_val)})
+            st.session_state.show_add_form = False
+    elif cancel_clicked:
+        st.session_state.show_add_form = False
+
+# Current list view (simple + removable)
+st.subheader("Stickers to print (in order)")
+if not st.session_state.stickers:
+    st.info("No stickers added yet.")
+else:
+    to_remove = None
+    for i, item in enumerate(st.session_state.stickers):
+        with st.container(border=True):
+            st.write(f"**{i+1}.** Top: `{item['top']}` · Bottom: `{item['bottom']}` · Count: `{item['count']}`")
+            if st.button("Remove", key=f"rm_{i}"):
+                to_remove = i
+    if to_remove is not None:
+        st.session_state.stickers.pop(to_remove)
+
+col_left, col_right = st.columns(2)
+with col_left:
+    if st.button("🧹 Clear all", use_container_width=True):
+        st.session_state.stickers = []
 
 st.divider()
 generate = st.button("📄 Generate PDF", type="primary", use_container_width=True)
 
 if generate:
     try:
+        # Convert list → DataFrame for the PDF function
+        jobs_df = pd.DataFrame(st.session_state.stickers)
         pdf_bytes, summary = make_multi_sticker_pdf_dynamic(
-            st.session_state.jobs_df,
-            page_w_in, page_h_in, margin_in, sticker_w_in, sticker_h_in
+            jobs_df, page_w_in, page_h_in, margin_in, sticker_w_in, sticker_h_in
         )
         st.success(
             f"Generated PDF with {summary['total']} stickers across {summary['pages']} page(s). "
