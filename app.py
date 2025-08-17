@@ -16,11 +16,15 @@ FONT_REQ        = "ArialBlack"
 FONT_SIZE_PT    = 18
 FONT_MIN_PT     = 12
 TEXT_COLOR      = Color(128/255, 0, 0)   # maroon
-DRAW_BORDERS    = False
+
+# OUTER/INNER BOXES OFF
+DRAW_BORDERS    = False                  # do NOT draw sticker rectangles
 BORDER_COLOR    = black
+
+# MIDDLE DIVIDER ON
+SHOW_DIVIDER    = True                   # keep the center line
 LINE_COLOR      = black
 LINE_THICK_PT   = 1.0
-SHOW_DIVIDER  = False   # add near other constants
 
 # Divider & text padding (inches)
 INNER_PAD_IN  = 0.05
@@ -69,12 +73,13 @@ def draw_centered_text_in_region(c, x_center_pt, y0_pt, y1_pt, text, font_name, 
     c.drawString(x_center_pt - w/2.0, baseline, text)
 
 def draw_sticker(c, x_pt, y_pt, w_pt, h_pt, top_text, bottom_text,
-                 font_name, font_size_pt, text_color, draw_border=True):
+                 font_name, font_size_pt, text_color, draw_border=False):
+    # NO outer/inner boxes (draw_border is False by default)
     if draw_border:
         c.setStrokeColor(BORDER_COLOR)
         c.rect(x_pt, y_pt, w_pt, h_pt, stroke=1, fill=0)
 
-    # Divider at halfway
+    # Divider at halfway (ALWAYS when SHOW_DIVIDER=True)
     line_y = y_pt + h_pt * 0.5
     if SHOW_DIVIDER:
         line_pad = INNER_PAD_IN * inch
@@ -113,6 +118,7 @@ def make_multi_sticker_pdf_dynamic(
     - Grid = floor(working_area / sticker_size)
     - Constant per-page capacity across all pages
     - Pad last page from top-left so it still has full grid with trailing blanks
+    - Fill order: row-major, TOP-LEFT → right → next row
     """
     df = jobs_df.copy().fillna("")
     df["top"] = df["top"].astype(str).str.strip()
@@ -151,7 +157,7 @@ def make_multi_sticker_pdf_dynamic(
     c = canvas.Canvas(buf, pagesize=(page_w_pt, page_h_pt))
     font_name = try_register_arial_black()
 
-    # order preserved exactly as entered
+    # preserve input order exactly
     def sticker_stream():
         for _, row in df.iterrows():
             for _ in range(int(row["count"])):
@@ -170,15 +176,15 @@ def make_multi_sticker_pdf_dynamic(
                 top, bottom = "", ""
                 is_blank = True
 
-            # Row-major, TOP-LEFT first:
-            r = slot // cols                 # 0..rows-1 (top-first logical row)
-            col = slot % cols                # 0..cols-1 (left→right)
+            # Row-major, TOP-LEFT first (convert to ReportLab's bottom origin)
+            r = slot // cols                 # logical row from top
+            col = slot % cols                # left→right
             row_from_bottom = (rows - 1) - r
             x = left_margin_pt + offset_x_pt + col * sticker_w_pt
             y = bottom_margin_pt + offset_y_pt + row_from_bottom * sticker_h_pt
 
             draw_sticker(c, x, y, sticker_w_pt, sticker_h_pt,
-                         top, bottom, font_name, FONT_SIZE_PT, TEXT_COLOR, DRAW_BORDERS)
+                         top, bottom, font_name, FONT_SIZE_PT, TEXT_COLOR, draw_border=DRAW_BORDERS)
             if not is_blank:
                 drawn += 1
 
@@ -267,7 +273,6 @@ generate = st.button("📄 Generate PDF", type="primary", use_container_width=Tr
 
 if generate:
     try:
-        # Convert list → DataFrame for the PDF function
         jobs_df = pd.DataFrame(st.session_state.stickers)
         pdf_bytes, summary = make_multi_sticker_pdf_dynamic(
             jobs_df, page_w_in, page_h_in, margin_in, sticker_w_in, sticker_h_in
