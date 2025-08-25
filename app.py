@@ -28,7 +28,7 @@ H_TEXT_PAD_IN = 0.06
 
 # Fine-tune vertical centering (points). Negative = move down; positive = move up
 # Tip: set to -6 to move the TOP value slightly closer to the center line.
-TOP_CENTER_BIAS_PT = 0
+TOP_CENTER_BIAS_PT = -2
 
 # ======== Font helpers ========
 def try_register_arial_black() -> str:
