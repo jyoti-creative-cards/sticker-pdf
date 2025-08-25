@@ -1,5 +1,5 @@
 # app.py
-# pip install streamlit reportlab pandas
+# pip install streamlit reportlab pandas openpyxl
 
 import os, io, math
 import pandas as pd
@@ -16,7 +16,7 @@ FONT_REQ        = "ArialBlack"
 FONT_SIZE_PT    = 18
 FONT_MIN_PT     = 12
 TEXT_COLOR      = Color(128/255, 0, 0)   # maroon
-DRAW_BORDERS    = False                  # <-- remove outer borders
+DRAW_BORDERS    = False                  # keep only the middle divider
 BORDER_COLOR    = black
 LINE_COLOR      = black
 LINE_THICK_PT   = 1.0
@@ -27,7 +27,8 @@ V_TEXT_PAD_IN = 0.06
 H_TEXT_PAD_IN = 0.06
 
 # Fine-tune vertical centering (points). Negative = move down; positive = move up
-TOP_CENTER_BIAS_PT = -2                  # <-- brings top text closer to the middle line
+# Tip: set to -6 to move the TOP value slightly closer to the center line.
+TOP_CENTER_BIAS_PT = 0
 
 # ======== Font helpers ========
 def try_register_arial_black() -> str:
@@ -96,14 +97,12 @@ def draw_sticker(c, x_pt, y_pt, w_pt, h_pt, top_text, bottom_text,
     max_text_w = w_pt - 2*hpad
 
     if top_text:
-        # bias the top text *down* toward the divider
         draw_centered_text_in_region(
             c, x_center, top_y0, top_y1, str(top_text),
             font_name, font_size_pt, max_text_w, text_color,
             center_bias_pt=TOP_CENTER_BIAS_PT
         )
     if bottom_text:
-        # bottom text unchanged (already centered in its half)
         draw_centered_text_in_region(
             c, x_center, bot_y0, bot_y1, str(bottom_text),
             font_name, font_size_pt, max_text_w, text_color,
@@ -184,8 +183,8 @@ def make_multi_sticker_pdf_dynamic(
                 is_blank = True
 
             # Row-major, TOP-LEFT first:
-            r = slot // cols                 # 0..rows-1 (top-first logical row)
-            col = slot % cols                # 0..cols-1 (left→right)
+            r = slot // cols
+            col = slot % cols
             row_from_bottom = (rows - 1) - r
             x = left_margin_pt + offset_x_pt + col * sticker_w_pt
             y = bottom_margin_pt + offset_y_pt + row_from_bottom * sticker_h_pt
@@ -222,75 +221,60 @@ with st.sidebar:
     sticker_w_in = st.number_input("Sticker width",  min_value=0.1, value=1.134, step=0.01, format="%.3f")
     sticker_h_in = st.number_input("Sticker height", min_value=0.1, value=0.585, step=0.01, format="%.3f")
 
-# Live capacity preview
-work_w = page_w_in - 2*margin_in
-work_h = page_h_in - 2*margin_in
-cols, rows, capacity = compute_grid(work_w, work_h, sticker_w_in, sticker_h_in)
-st.caption(f"Working area: **{work_w:.3f} × {work_h:.3f} in** · Grid: **{cols} × {rows} = {capacity}** per page")
+# Upload input file (Excel/CSV) with exactly 3 columns: Top, Bottom, Count
+st.subheader("Input file")
+uploaded = st.file_uploader("Upload Excel/CSV (3 columns: Top, Bottom, Count)", type=["xlsx", "xls", "csv"])
 
-# Session state: list of stickers [{top, bottom, count}, ...]
-if "stickers" not in st.session_state:
-    st.session_state.stickers = [{"top": "5001", "bottom": "19608", "count": 1}]
-if "show_add_form" not in st.session_state:
-    st.session_state.show_add_form = False
+# Keep a flag to avoid multi-click issues
 if "do_generate" not in st.session_state:
     st.session_state.do_generate = False
 
-# Add sticker flow (mobile-friendly)
-if not st.session_state.show_add_form:
-    if st.button("➕ Add sticker", use_container_width=True):
-        st.session_state.show_add_form = True
-else:
-    with st.form("add_sticker_form", clear_on_submit=True):
-        top_val = st.text_input("Top (upper value)")
-        bottom_val = st.text_input("Bottom (lower value)")
-        count_val = st.number_input("Number of stickers", min_value=1, step=1, value=1)
-        c1, c2 = st.columns(2)
-        add_clicked = c1.form_submit_button("Add", use_container_width=True)
-        cancel_clicked = c2.form_submit_button("Cancel", use_container_width=True)
+def _load_df_from_upload(file) -> pd.DataFrame:
+    # Accept both Excel and CSV; assume the first 3 columns are Top/Bottom/Count
+    name = file.name.lower()
+    if name.endswith(".csv"):
+        df_raw = pd.read_csv(file, header=None)  # simplest: 3 cols in order
+    else:
+        df_raw = pd.read_excel(file, header=None, engine="openpyxl")
 
-    if add_clicked:
-        t = (top_val or "").strip()
-        b = (bottom_val or "").strip()
-        if not t or not b:
-            st.warning("Please enter both Top and Bottom values.")
-        else:
-            st.session_state.stickers.append({"top": t, "bottom": b, "count": int(count_val)})
-            st.session_state.show_add_form = False
-    elif cancel_clicked:
-        st.session_state.show_add_form = False
+    if df_raw.shape[1] < 3:
+        raise ValueError("The uploaded file must have at least 3 columns (Top, Bottom, Count).")
 
-# Current list view (simple + removable)
-st.subheader("Stickers to print (in order)")
-if not st.session_state.stickers:
-    st.info("No stickers added yet.")
-else:
-    to_remove = None
-    for i, item in enumerate(st.session_state.stickers):
-        with st.container(border=True):
-            st.write(f"**{i+1}.** Top: `{item['top']}` · Bottom: `{item['bottom']}` · Count: `{item['count']}`")
-            if st.button("Remove", key=f"rm_{i}"):
-                to_remove = i
-    if to_remove is not None:
-        st.session_state.stickers.pop(to_remove)
+    df = pd.DataFrame({
+        "top":    df_raw.iloc[:, 0],
+        "bottom": df_raw.iloc[:, 1],
+        "count":  df_raw.iloc[:, 2],
+    })
+    # Trim/clean
+    df["top"] = df["top"].astype(str).str.strip()
+    df["bottom"] = df["bottom"].astype(str).str.strip()
+    df["count"] = pd.to_numeric(df["count"], errors="coerce").fillna(0).astype(int)
+    # Keep only valid rows
+    df = df[(df["top"] != "") & (df["bottom"] != "") & (df["count"] > 0)].reset_index(drop=True)
+    if df.empty:
+        raise ValueError("No valid rows found. Ensure the first 3 columns are Top, Bottom, Count with positive counts.")
+    return df
 
-col_left, col_right = st.columns(2)
-with col_left:
-    if st.button("🧹 Clear all", use_container_width=True):
-        st.session_state.stickers = []
+# Preview + Generate
+if uploaded is not None:
+    try:
+        jobs_df = _load_df_from_upload(uploaded)
+        st.success(f"Loaded {len(jobs_df)} sticker rows from file.")
+        st.dataframe(jobs_df.head(50), use_container_width=True)
 
-st.divider()
+        # Generate button sets the flag; generation runs in the next block
+        def _on_generate():
+            st.session_state.do_generate = True
 
-# Use a state flag to avoid multiple-click issue
-def _on_generate():
-    st.session_state.do_generate = True
+        st.button("📄 Generate PDF", type="primary", use_container_width=True, on_click=_on_generate)
 
-st.button("📄 Generate PDF", type="primary", use_container_width=True, on_click=_on_generate)
+    except Exception as e:
+        st.error(str(e))
 
 # If flagged, generate once on this rerun
-if st.session_state.do_generate:
+if st.session_state.do_generate and uploaded is not None:
     try:
-        jobs_df = pd.DataFrame(st.session_state.stickers)
+        jobs_df = _load_df_from_upload(uploaded)  # reload to be safe
         pdf_bytes, summary = make_multi_sticker_pdf_dynamic(
             jobs_df, page_w_in, page_h_in, margin_in, sticker_w_in, sticker_h_in
         )
@@ -308,5 +292,7 @@ if st.session_state.do_generate:
     except Exception as e:
         st.error(str(e))
     finally:
-        # reset so next click is clean
         st.session_state.do_generate = False
+
+# Helper caption
+st.caption("File format: exactly three columns per row → [Top, Bottom, Count]. No headers needed.")
