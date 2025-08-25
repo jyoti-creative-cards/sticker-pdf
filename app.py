@@ -16,7 +16,7 @@ FONT_REQ        = "ArialBlack"
 FONT_SIZE_PT    = 18
 FONT_MIN_PT     = 12
 TEXT_COLOR      = Color(128/255, 0, 0)   # maroon
-DRAW_BORDERS    = True
+DRAW_BORDERS    = False                  # <-- remove outer borders
 BORDER_COLOR    = black
 LINE_COLOR      = black
 LINE_THICK_PT   = 1.0
@@ -25,6 +25,9 @@ LINE_THICK_PT   = 1.0
 INNER_PAD_IN  = 0.05
 V_TEXT_PAD_IN = 0.06
 H_TEXT_PAD_IN = 0.06
+
+# Fine-tune vertical centering (points). Negative = move down; positive = move up
+TOP_CENTER_BIAS_PT = 0                  # <-- brings top text closer to the middle line
 
 # ======== Font helpers ========
 def try_register_arial_black() -> str:
@@ -56,7 +59,10 @@ def fit_font_size(font_name, text, max_width_pt, desired_pt, min_pt):
         return min_pt
     return max(min_pt, desired_pt * (max_width_pt / w))
 
-def draw_centered_text_in_region(c, x_center_pt, y0_pt, y1_pt, text, font_name, base_font_size_pt, max_width_pt, color):
+def draw_centered_text_in_region(
+    c, x_center_pt, y0_pt, y1_pt, text, font_name,
+    base_font_size_pt, max_width_pt, color, center_bias_pt=0.0
+):
     font_size_pt = fit_font_size(font_name, text, max_width_pt, base_font_size_pt, FONT_MIN_PT)
     c.setFillColor(color)
     c.setFont(font_name, font_size_pt)
@@ -64,16 +70,17 @@ def draw_centered_text_in_region(c, x_center_pt, y0_pt, y1_pt, text, font_name, 
     a = pdfmetrics.getAscent(font_name)
     d = pdfmetrics.getDescent(font_name)  # negative
     region_center = (y0_pt + y1_pt) / 2.0
-    baseline = region_center - ((a + d) * font_size_pt) / 2000.0
+    baseline = region_center - ((a + d) * font_size_pt) / 2000.0 + center_bias_pt
     c.drawString(x_center_pt - w/2.0, baseline, text)
 
 def draw_sticker(c, x_pt, y_pt, w_pt, h_pt, top_text, bottom_text,
-                 font_name, font_size_pt, text_color, draw_border=True):
+                 font_name, font_size_pt, text_color, draw_border=False):
+    # Outer border removed by default
     if draw_border:
         c.setStrokeColor(BORDER_COLOR)
         c.rect(x_pt, y_pt, w_pt, h_pt, stroke=1, fill=0)
 
-    # Divider at halfway
+    # Divider at halfway (we keep only this middle line)
     line_y = y_pt + h_pt * 0.5
     line_pad = INNER_PAD_IN * inch
     c.setStrokeColor(LINE_COLOR)
@@ -89,11 +96,19 @@ def draw_sticker(c, x_pt, y_pt, w_pt, h_pt, top_text, bottom_text,
     max_text_w = w_pt - 2*hpad
 
     if top_text:
-        draw_centered_text_in_region(c, x_center, top_y0, top_y1, str(top_text),
-                                     font_name, font_size_pt, max_text_w, text_color)
+        # bias the top text *down* toward the divider
+        draw_centered_text_in_region(
+            c, x_center, top_y0, top_y1, str(top_text),
+            font_name, font_size_pt, max_text_w, text_color,
+            center_bias_pt=TOP_CENTER_BIAS_PT
+        )
     if bottom_text:
-        draw_centered_text_in_region(c, x_center, bot_y0, bot_y1, str(bottom_text),
-                                     font_name, font_size_pt, max_text_w, text_color)
+        # bottom text unchanged (already centered in its half)
+        draw_centered_text_in_region(
+            c, x_center, bot_y0, bot_y1, str(bottom_text),
+            font_name, font_size_pt, max_text_w, text_color,
+            center_bias_pt=0.0
+        )
 
 def compute_grid(work_w_in, work_h_in, sticker_w_in, sticker_h_in):
     """Max whole stickers that fit (no gaps)."""
@@ -175,8 +190,10 @@ def make_multi_sticker_pdf_dynamic(
             x = left_margin_pt + offset_x_pt + col * sticker_w_pt
             y = bottom_margin_pt + offset_y_pt + row_from_bottom * sticker_h_pt
 
-            draw_sticker(c, x, y, sticker_w_pt, sticker_h_pt,
-                         top, bottom, font_name, FONT_SIZE_PT, TEXT_COLOR, DRAW_BORDERS)
+            draw_sticker(
+                c, x, y, sticker_w_pt, sticker_h_pt,
+                top, bottom, font_name, FONT_SIZE_PT, TEXT_COLOR, DRAW_BORDERS
+            )
             if not is_blank:
                 drawn += 1
 
@@ -216,6 +233,8 @@ if "stickers" not in st.session_state:
     st.session_state.stickers = [{"top": "5001", "bottom": "19608", "count": 1}]
 if "show_add_form" not in st.session_state:
     st.session_state.show_add_form = False
+if "do_generate" not in st.session_state:
+    st.session_state.do_generate = False
 
 # Add sticker flow (mobile-friendly)
 if not st.session_state.show_add_form:
@@ -261,11 +280,16 @@ with col_left:
         st.session_state.stickers = []
 
 st.divider()
-generate = st.button("📄 Generate PDF", type="primary", use_container_width=True)
 
-if generate:
+# Use a state flag to avoid multiple-click issue
+def _on_generate():
+    st.session_state.do_generate = True
+
+st.button("📄 Generate PDF", type="primary", use_container_width=True, on_click=_on_generate)
+
+# If flagged, generate once on this rerun
+if st.session_state.do_generate:
     try:
-        # Convert list → DataFrame for the PDF function
         jobs_df = pd.DataFrame(st.session_state.stickers)
         pdf_bytes, summary = make_multi_sticker_pdf_dynamic(
             jobs_df, page_w_in, page_h_in, margin_in, sticker_w_in, sticker_h_in
@@ -283,3 +307,6 @@ if generate:
         )
     except Exception as e:
         st.error(str(e))
+    finally:
+        # reset so next click is clean
+        st.session_state.do_generate = False
