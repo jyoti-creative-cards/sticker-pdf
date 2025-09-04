@@ -7,7 +7,7 @@ import streamlit as st
 
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import inch
-from reportlab.lib.colors import Color, black
+from reportlab.lib.colors import Color, black, green, yellow, red, blue, purple, orange, brown
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
@@ -15,7 +15,21 @@ from reportlab.pdfbase.ttfonts import TTFont
 FONT_REQ        = "ArialBlack"
 FONT_SIZE_PT    = 18
 FONT_MIN_PT     = 12
-TEXT_COLOR      = Color(128/255, 0, 0)   # maroon
+# Pre-defined color palette for cycling through different colors
+COLOR_PALETTE = [
+    Color(128/255, 0, 0),        # maroon
+    black,                       # black
+    green,                       # green
+    yellow,                      # yellow
+    red,                         # red
+    blue,                        # blue
+    purple,                      # purple
+    orange,                      # orange
+    brown,                       # brown
+    Color(0, 128/255, 128/255), # teal
+    Color(128/255, 0, 128/255), # purple
+    Color(0, 0, 128/255),       # navy
+]
 DRAW_BORDERS    = False                  # keep only the middle divider
 BORDER_COLOR    = black
 LINE_COLOR      = black
@@ -125,14 +139,23 @@ def make_multi_sticker_pdf_dynamic(
     - Grid = floor(working_area / sticker_size)
     - Constant per-page capacity across all pages
     - Pad last page from top-left so it still has full grid with trailing blanks
+    - Each unique row gets a different color from the palette
     """
     df = jobs_df.copy().fillna("")
+    # Convert to string to accept both numbers and text
     df["top"] = df["top"].astype(str).str.strip()
     df["bottom"] = df["bottom"].astype(str).str.strip()
     df["count"] = pd.to_numeric(df["count"], errors="coerce").fillna(0).astype(int)
     df = df[(df["top"] != "") & (df["bottom"] != "") & (df["count"] > 0)]
     if df.empty:
         raise ValueError("No valid sticker rows. Fill top, bottom, and a positive count.")
+
+    # Assign a color to each unique row (top+bottom combination)
+    unique_rows = df[['top', 'bottom']].drop_duplicates()
+    color_mapping = {}
+    for i, (_, row) in enumerate(unique_rows.iterrows()):
+        color_index = i % len(COLOR_PALETTE)
+        color_mapping[(row['top'], row['bottom'])] = COLOR_PALETTE[color_index]
 
     work_w_in = page_w_in - 2 * margin_in
     work_h_in = page_h_in - 2 * margin_in
@@ -166,8 +189,9 @@ def make_multi_sticker_pdf_dynamic(
     # order preserved exactly as entered
     def sticker_stream():
         for _, row in df.iterrows():
+            color = color_mapping[(row["top"], row["bottom"])]
             for _ in range(int(row["count"])):
-                yield (row["top"], row["bottom"])
+                yield (row["top"], row["bottom"], color)
 
     stream = sticker_stream()
     total_count = int(df["count"].sum())
@@ -176,10 +200,10 @@ def make_multi_sticker_pdf_dynamic(
     while True:
         for slot in range(capacity):
             try:
-                top, bottom = next(stream)
+                top, bottom, color = next(stream)
                 is_blank = False
             except StopIteration:
-                top, bottom = "", ""
+                top, bottom, color = "", "", black
                 is_blank = True
 
             # Row-major, TOP-LEFT first:
@@ -191,7 +215,7 @@ def make_multi_sticker_pdf_dynamic(
 
             draw_sticker(
                 c, x, y, sticker_w_pt, sticker_h_pt,
-                top, bottom, font_name, FONT_SIZE_PT, TEXT_COLOR, DRAW_BORDERS
+                top, bottom, font_name, FONT_SIZE_PT, color, DRAW_BORDERS
             )
             if not is_blank:
                 drawn += 1
@@ -207,6 +231,7 @@ def make_multi_sticker_pdf_dynamic(
     return pdf_bytes, {
         "cols": cols, "rows": rows, "per_page": capacity,
         "total": drawn, "pages": math.ceil(drawn / capacity),
+        "colors_used": len(set(color_mapping.values()))
     }
 
 # ========================= Streamlit UI =========================
@@ -245,7 +270,7 @@ def _load_df_from_upload(file) -> pd.DataFrame:
         "bottom": df_raw.iloc[:, 1],
         "count":  df_raw.iloc[:, 2],
     })
-    # Trim/clean
+    # Trim/clean - convert to string to accept both numbers and text
     df["top"] = df["top"].astype(str).str.strip()
     df["bottom"] = df["bottom"].astype(str).str.strip()
     df["count"] = pd.to_numeric(df["count"], errors="coerce").fillna(0).astype(int)
@@ -280,7 +305,8 @@ if st.session_state.do_generate and uploaded is not None:
         )
         st.success(
             f"Generated PDF with {summary['total']} stickers across {summary['pages']} page(s). "
-            f"(Per page: {summary['cols']} × {summary['rows']} = {summary['per_page']})"
+            f"(Per page: {summary['cols']} × {summary['rows']} = {summary['per_page']}) "
+            f"Using {summary['colors_used']} different colors."
         )
         st.download_button(
             label="⬇️ Download sticker_sheet.pdf",
@@ -295,4 +321,5 @@ if st.session_state.do_generate and uploaded is not None:
         st.session_state.do_generate = False
 
 # Helper caption
-st.caption("File format: exactly three columns per row → [Top, Bottom, Count]. No headers needed.")
+st.caption("File format: exactly three columns per row → [Top, Bottom, Count]. No headers needed. "
+           "Top and Bottom can contain both numbers and text. Each unique row gets a different color.")
