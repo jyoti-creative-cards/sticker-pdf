@@ -257,7 +257,7 @@ def _load_df_from_upload(file) -> pd.DataFrame:
     # Trim/clean - convert to string to accept both numbers and text
     df["top"] = df["top"].astype(str).str.strip()
     df["bottom"] = df["bottom"].astype(str).str.strip()
-    df["count"] = pd.to_numeric(df["count"], errors="coerce").fillna(0).ast(int)
+    df["count"] = pd.to_numeric(df["count"], errors="coerce").fillna(0).astype(int)  # Fixed: astype(int) instead of ast(int)
     # Keep only valid rows
     df = df[(df["top"] != "") & (df["bottom"] != "") & (df["count"] > 0)].reset_index(drop=True)
     if df.empty:
